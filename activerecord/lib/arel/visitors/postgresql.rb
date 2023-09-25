@@ -88,6 +88,26 @@ module Arel # :nodoc: all
           collector << " NULLS LAST"
         end
 
+        # Postgres-specific implementation that uses `col = any('{1,2}')` instead of `col IN (1,2)`
+        # to avoid pg_stat_statements churn
+        def visit_Arel_Nodes_HomogeneousIn(o, collector)
+          oid = ActiveRecord::ConnectionAdapters::PostgreSQL::OID
+          case o.attribute.type_caster
+          when oid::Bytea, oid::Jsonb
+            return super
+          end
+
+          visit o.left, collector
+          collector << (o.type == :in ? " = any(" : " != all(")
+
+          type_caster = oid::Array.new(o.attribute.type_caster, ",")
+          values = [type_caster.serialize(o.casted_values)]
+          proc_for_binds = -> value { ActiveModel::Attribute.with_cast_value(o.attribute.name, value, type_caster) }
+          collector.add_binds(values, proc_for_binds, &bind_block)
+
+          collector << ")"
+        end
+
         BIND_BLOCK = proc { |i| "$#{i}" }
         private_constant :BIND_BLOCK
 
